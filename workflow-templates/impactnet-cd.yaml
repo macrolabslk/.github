@@ -1,0 +1,79 @@
+name: Impactnet Deploy Pipeline
+
+on:
+  push:
+    branches: [ $default-branch ]
+    tags:
+      - 'staging-v*.*.*'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: impactnet-auth-service
+  ENVIRONMENT: staging
+  DEPLOYMENT_MANIFEST_PATH: ${{ env.ENVIRONMENT }}/services/auth/deployment.yaml
+  COMMITTER_USERNAME: chamodshehanka
+  COMMITTER_EMAIL: hcsperera@gmail.com
+
+jobs:
+  BuildImageAndUpdateGitOpsRepo:
+    name: Build Image and Update GitOps Repository
+    runs-on: ubuntu-latest
+    environment: ${{ env.ENVIRONMENT }}
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔐 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔑 Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: 🗄️ Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: 📦 Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: 📚 Clone GitOps Repository
+        uses: actions/checkout@v4
+        with:
+          repository: macrolabslk/impactnet-argocd-app-configs
+          path: argocd-repo
+          token: ${{ secrets.REPO_CI_TOKEN }}
+          ref: 'main'
+
+      - name: 🏷️ Update Image Tag
+        run: |
+          sed -i "s|${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:.*|${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}|g" argocd-repo/${{ env.DEPLOYMENT_MANIFEST_PATH }}
+
+      - name: 🔄 Update GitOps Repository
+        run: |
+          cd argocd-repo
+          git config user.name "${{ env.COMMITTER_USERNAME }}"
+          git config user.email "${{ env.COMMITTER_EMAIL }}"
+          git add ${{ env.DEPLOYMENT_MANIFEST_PATH }}
+          git commit -m "Update ${{ env.ECR_REPOSITORY }} image tag to ${{ env.IMAGE_TAG }}"
+          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.REPO_CI_TOKEN }}
