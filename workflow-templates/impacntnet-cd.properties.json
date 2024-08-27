@@ -1,0 +1,8 @@
+{
+  "name": "Impacntnet CD Deploy Workflow",
+  "description": "Impacntnet CD Deploy Workflow",
+  "iconName": "rocket",
+  "categories": [
+    "Deployment"
+  ],
+}
